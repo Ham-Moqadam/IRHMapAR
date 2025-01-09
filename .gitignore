@@ -1,3 +1,7 @@
 grams/*
 masks/*
+*.keras
+*.png
+*.pdf
+*.jpg
 

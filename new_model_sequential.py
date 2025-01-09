@@ -39,9 +39,28 @@ import numpy as np
 from skimage.measure import label
 from scipy.spatial import cKDTree
 
+
 def load_mask(filepath):
-    """Load a binary mask from a CSV file."""
-    return np.loadtxt(filepath, delimiter=',', dtype=int)
+    """Load a binary mask from a CSV file and convert to integers."""
+    mask = np.loadtxt(filepath, delimiter=',', dtype=float)  # Load as float
+    return mask.astype(int)  # Explicitly convert to integer
+
+
+
+def normalize_matrix(image, lower_range, upper_range):
+    """
+    normalizes the image, within the given the upper and lower limit
+    """
+    import numpy as np
+
+    a = np.array((image - np.min(image)) / (np.max(image) - np.min(image)))
+    b = upper_range - lower_range
+    c = lower_range
+    answer = a*b + c
+    return answer
+
+
+
 
 def separate_irhs(mask):
     """
@@ -190,70 +209,60 @@ visualize_traversal(mask, sequence)
 ## -- Generate Incremental Masks for an IRH
 
 import numpy as np
-import random
 from skimage.measure import label
 from scipy.spatial import cKDTree
 
-def load_mask(filepath):
-    """Load a binary mask from a CSV file."""
-    return np.loadtxt(filepath, delimiter=',', dtype=int)
 
-def separate_irhs(mask):
-    """Separate individual IRHs using connected component labeling."""
-    labeled_mask = label(mask, connectivity=2)  # 8-connectivity
-    return labeled_mask
-
-def traverse_irh(leftmost, irh_coords):
-    """Traverse IRH pixels starting from the leftmost pixel."""
-    tree = cKDTree(irh_coords)
-    visited = set()  # Track visited pixels
-    sequence = []  # Store ordered traversal
-
-    current = leftmost
-    while current is not None:
-        sequence.append(current)
-        visited.add(tuple(current))
-        
-        ## -- Query the nearest neighbors
-        neighbors = tree.query_ball_point(current, r=1.5)
-        neighbors = [irh_coords[i] for i in neighbors if tuple(irh_coords[i]) not in visited]
-        
-        ## -- Choose the next point that is to the right and not yet visited
-        current = None
-        for neighbor in sorted(neighbors, key=lambda x: x[1]):  # Sort by y-coordinate (left-to-right)
-            if tuple(neighbor) not in visited:
-                current = neighbor
-                break
+def generate_incremental_masks(mask, irh_label, increment_size=5):
+    """
+    Generate incremental masks for a single IRH.
     
-    return np.array(sequence)
-
-def generate_incremental_masks(mask, irh_label, n=10):
-    """Generate incremental masks for a single IRH."""
-    ## -- Get the coordinates of the IRH (1s in the mask)
+    Parameters:
+    - mask: the full binary mask
+    - irh_label: the label of the IRH to process
+    - increment_size: number of pixels to increment by in each step
+                     (e.g., 10 means show 10 pixels, then 20, then 30, etc.)
+    
+    Returns:
+    - List of binary masks, each showing progressively more pixels of the IRH
+    """
+    # Get the coordinates of the IRH
     labeled_mask = separate_irhs(mask)
     irh_coords = np.array(np.where(labeled_mask == irh_label)).T
     
-    ## -- Traverse the IRH to get an ordered sequence of pixels
+    # Traverse the IRH to get an ordered sequence of pixels
     leftmost = irh_coords[np.argmin(irh_coords[:, 1])]  # Find leftmost pixel
     traversal = traverse_irh(leftmost, irh_coords)
     
-    ## -- Generate incremental masks
+    # Generate incremental masks
     incremental_masks = []
-    for i in range(1, len(traversal) + 1, n):  ## -- Generate masks from 1 to n pixels
+    total_pixels = len(traversal)
+    
+    # Generate masks showing progressively more pixels
+    for pixel_count in range(increment_size, total_pixels + increment_size, increment_size):
         mask_copy = np.zeros_like(mask)
-        for j in range(i):
+        # Limit pixel_count to not exceed total available pixels
+        actual_pixels = min(pixel_count, total_pixels)
+        
+        for j in range(actual_pixels):
             x, y = traversal[j]
+            mask_copy[x, y] = 1
+        incremental_masks.append(mask_copy)
+    
+    # Always include a mask with all pixels if the last increment didn't include it
+    if total_pixels % increment_size != 0:
+        mask_copy = np.zeros_like(mask)
+        for x, y in traversal:
             mask_copy[x, y] = 1
         incremental_masks.append(mask_copy)
     
     return incremental_masks
 
-
-
 #%%
 
 ## --- integrate incremental mask generation into the training data pipeline
 
+import random
 import tensorflow as tf
 
 def load_radargram_and_mask(radargram_path, mask_path):
@@ -262,63 +271,87 @@ def load_radargram_and_mask(radargram_path, mask_path):
     mask = load_mask(mask_path)
     return radargram, mask
 
-def generate_training_data(radargram_path, mask_path, n=10):
-    """Generate training data samples."""
+def generate_training_data(radargram_path, mask_path, increment_size=5, samples_per_irh=20):
+    """
+    Generate training samples from a radargram and mask.
+    
+    Parameters:
+    - radargram_path: path to the radargram file
+    - mask_path: path to the mask file
+    - increment_size: how many pixels to increment by when creating partial masks
+    - samples_per_irh: how many different training samples to generate per IRH
+    """
     radargram, mask = load_radargram_and_mask(radargram_path, mask_path)
     
-    ## -- Separate IRHs and generate incremental masks for each IRH
     labeled_mask = separate_irhs(mask)
     irh_labels = np.unique(labeled_mask)[1:]  # Exclude background (0 label)
     
     training_samples = []
-    
-    ## -- Counter to track how many samples are generated
     counter = 0
     
-    ## -- For each IRH in the mask, generate incremental masks
     for irh_label in irh_labels:
-        incremental_masks = generate_incremental_masks(mask, irh_label, n)
+        # Generate incremental masks with specified increment size
+        incremental_masks = generate_incremental_masks(mask, irh_label, increment_size)
         
-        ## -- Randomly select one of the incremental masks for training
-        random_mask = random.choice(incremental_masks)
-        
-        ## -- Create the training sample
-        training_samples.append((radargram, random_mask))
-        
-        ## -- Increment the counter and print the sample count
-        counter += 1
-        print(f"Training sample {counter} generated")
+        # Take the specified number of samples from these masks
+        for _ in range(samples_per_irh):
+            random_mask = random.choice(incremental_masks)
+            training_samples.append((radargram, random_mask))
+            counter += 1
+            print(f"Training sample {counter} generated")
     
     return training_samples
 
+
+
 def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
     """Create TensorFlow data pipeline from the radargram and mask files."""
+
     dataset = []
     
-    ## -- Iterate over all radargram and mask files in the specified directories
     for radargram_file in sorted(os.listdir(radargram_dir)):
         if radargram_file.endswith(".csv"):
             radargram_path = os.path.join(radargram_dir, radargram_file)
-            mask_path = os.path.join(mask_dir, radargram_file)  # Assuming masks have the same names as radargram files
+            mask_path = os.path.join(mask_dir, radargram_file)
 
-            ## -- Generate training samples
-            training_samples = generate_training_data(radargram_path, mask_path, n=10)
+            training_samples = generate_training_data(radargram_path, mask_path, samples_per_irh=20)
             
             for radargram, mask in training_samples:
-                dataset.append((radargram, mask))
+                # Convert to float32 and add channel dimension
+                radargram = np.float32(radargram[..., np.newaxis])
+                mask = np.float32(mask[..., np.newaxis])
+                termination_mask = np.float32(np.zeros_like(mask))
+                
+                # Create the nested tuple structure explicitly
+                output_tuple = (mask, termination_mask)
+                dataset.append((radargram, output_tuple))
     
-    ## -- Convert dataset to a TensorFlow dataset
-    dataset = tf.data.Dataset.from_generator(
-        lambda: dataset,
-        (tf.float32, tf.float32)  # Radargram and mask are both float32
-    )
+    
+    
+    def generator():
+        for radargram, (mask, term) in dataset:
+            # Ensure we yield with the correct nested structure
+            yield (radargram, (mask, term))
+
+    return tf.data.Dataset.from_generator(
+        generator,
+        output_signature=(
+            tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
+            (
+                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
+                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32)
+            )
+        )
+    ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
     
 
     ## -- Set parallelism options and batch the data
     options = tf.data.Options()
-    options.experimental_threading.max_intra_op_parallelism = 1  # Use only one thread for the private thread pool
-    options.experimental_threading.private_threadpool_size = 1  # Limit operations to 1 thread
+    options.threading.max_intra_op_parallelism = 1  # Use only one thread for intra-op parallelism
+    options.threading.private_threadpool_size = 1  # Limit operations to 1 thread
     dataset = dataset.with_options(options)
+
     
     
     ## -- Batch and prefetch for performance
@@ -371,22 +404,61 @@ def unet_model(input_shape=(64, 64, 1)):
     return model
 
 
+## -- custom softmax loss
+def custom_softmax_loss(y_true, y_pred):
+    """
+    Custom softmax loss function for IRH detection.
+    
+    Parameters:
+    y_true: Ground truth labels (batch_size, height, width, channels)
+    y_pred: Model predictions (batch_size, height, width, channels)
+    """
+    # Apply softmax across spatial dimensions
+    spatial_softmax = tf.nn.softmax(y_pred, axis=(1, 2))
+    
+    # Calculate cross entropy loss
+    loss = tf.keras.losses.categorical_crossentropy(
+        y_true, 
+        spatial_softmax,
+        from_logits=False  # Since we already applied softmax
+    )
+    
+    # Return mean loss across batch
+    return tf.reduce_mean(loss)
+
 
 
 
 #%%
 
+
 ## -- total number of traing samples
 sample_count = sum(1 for _ in create_tf_data_pipeline(radargram_dir='./grams/', mask_dir='./masks/', batch_size=4))
 print(f"Total training samples: {sample_count}")
+# print(f"Training sample {counter} generated from file {radargram_path}, IRH {irh_label}")
+
+
+"""
+
+# 5. Optional: Add learning rate scheduler
+initial_learning_rate = 0.001
+decay_steps = 1000
+decay_rate = 0.9
+
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate,
+    decay_steps=decay_steps,
+    decay_rate=decay_rate
+)
 
 
 ##-- Define the model
 model = unet_model(input_shape=(64, 64, 1))
 
+
 ##-- Compile the model
 model.compile(
-    optimizer='adam',
+    optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
     loss={
         'irh_output': 'binary_crossentropy',
         'terminate_output': 'binary_crossentropy',
@@ -400,32 +472,187 @@ model.compile(
 ##-- Print model summary to verify architecture
 model.summary()
 
-## -- dynamically generate the data
+
+
+# Debug: Count total samples
+total_samples = 0
+batch_count = 0
+
+
+## -- dynamically generate the data (Create dataset)
 train_data = create_tf_data_pipeline(radargram_dir='./grams/', 
-                                     mask_dir='./masks/', 
-                                     batch_size=4)
-
-model.fit(train_data, epochs=20, verbose=1)
-
-print (" >>>>> THE TRAINING IS DONE <<<<<<")
+                                   mask_dir='./masks/', 
+                                   batch_size=4)
 
 
+# Debug: Test a single batch
+for inputs, (mask, term) in train_data.take(1):
+    print("Input shape:", inputs.shape)
+    print("Mask shape:", mask.shape)
+    print("Termination shape:", term.shape)
+    break
+
+
+# Count samples in each batch
+for batch_x, (batch_mask, batch_term) in train_data:
+    batch_count += 1
+    samples_in_batch = batch_x.shape[0]  # Should be 4 (or less for last batch)
+    total_samples += samples_in_batch
+    print(f"Batch {batch_count}: {samples_in_batch} samples")
+
+print(f"\nTotal batches: {batch_count}")
+print(f"Total samples: {total_samples}")
+
+"""
+
+
+#%%
+
+## -- training block
+
+# 1. Add callbacks for better training control and monitoring
+early_stopping = tf.keras.callbacks.EarlyStopping(
+    monitor='val_loss',  # Monitor validation loss instead of training loss
+    patience=10,
+    restore_best_weights=True,
+    verbose=1
+)
+
+model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    filepath='best_model.keras',
+    monitor='val_loss',  # Monitor validation loss instead of training loss
+    save_best_only=True,
+    verbose=1
+)
+
+reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+    monitor='val_loss',  # Monitor validation loss instead of training loss
+    factor=0.5,
+    patience=5,
+    min_lr=1e-6,
+    verbose=1
+)
+
+# 2. Split data into training and validation sets
+train_size = int(0.8 * total_samples)  # 80% for training
+train_dataset = train_data.take(train_size)
+val_dataset = train_data.skip(train_size)
+
+# 3. Compile the model (ensure loss and metrics are defined)
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
+    loss={
+        'irh_output': 'binary_crossentropy',
+        'terminate_output': 'binary_crossentropy',
+    },
+    metrics={
+        'irh_output': ['accuracy'],
+        'terminate_output': ['accuracy'],
+    }
+)
+
+# 4. Enhanced training call
+history = model.fit(
+    train_dataset,
+    validation_data=val_dataset,
+    epochs=100,
+    verbose=1,
+    callbacks=[early_stopping, model_checkpoint, reduce_lr]
+)
+
+# 5. Plot training history
+plt.figure(figsize=(12, 4))
+
+# Plot loss
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
+# Plot accuracy
+plt.subplot(1, 2, 2)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
 
 
 
 
+###############################################################################
+## -- old train data
+# 
+model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    filepath='best_model.keras',
+    monitor='loss',  # Monitors training loss
+    save_best_only=True,
+    verbose=1
+)
+
+model.fit(
+    train_data,
+    epochs=100,
+    verbose=1,
+    callbacks=[model_checkpoint]
+)
+
+
+# Save the trained model
+model.save('trained_model.keras')
 
 
 
 
+#%%
 
 
+## -- PRWEDICITON WITH THEM
+
+from tensorflow.keras.models import load_model
+
+# Load the saved model
+saved_model = load_model('trained_model.keras')
 
 
+gram_piece = np.loadtxt("../DATA/grams/20023150_patch_16.csv", delimiter = ",")
+mask_piece = np.loadtxt("../DATA/masks/20023150_patch_16.csv", delimiter = ",")
+
+n = random.randrange(0,448)
+m = n + 64
+
+gram_piece_small = gram_piece[n:m, n:m]
+mask_piece_smal = mask_piece [n:m, n:m]
+
+input_data = gram_piece_small.reshape(1, 64, 64, 1)
+
+predictions = saved_model.predict(input_data)
+
+predicted_irh = predictions[0]
+predicted_irh =  normalize_matrix(predicted_irh, 0, 1)
+prediction_stopping = predictions[1]
+prediction_stopping = normalize_matrix(prediction_stopping , 0, 1)
 
 
-
-
+plt.subplot(221)
+plt.title("radargram")
+plt.imshow(gram_piece_small)
+plt.subplot(222)
+plt.title("mask")
+plt.imshow(mask_piece_smal)
+plt.subplot(223)
+plt.title("output - predicted horizon")
+plt.imshow(predicted_irh[0,:,:,0])
+plt.subplot(224)
+plt.title("ouput - prediction stopping")
+plt.imshow(prediction_stopping[0,:,:,0])
 
 
 
