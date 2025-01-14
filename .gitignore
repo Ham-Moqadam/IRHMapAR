@@ -4,4 +4,5 @@ masks/*
 *.png
 *.pdf
 *.jpg
-
+d_masks_64_64/*
+d_grams_64_64/*

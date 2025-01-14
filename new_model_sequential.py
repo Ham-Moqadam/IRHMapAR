@@ -821,7 +821,7 @@ for start_point in starting_points:
 
 # Example usage:
 def trace_full_image(model, radargram, start_row=0, step_size=10):
-    # """
+    #   
     # Traces horizons across the full image starting from multiple points.
     # Args:
     # - model: Trained model
@@ -830,7 +830,7 @@ def trace_full_image(model, radargram, start_row=0, step_size=10):
     # - step_size: Horizontal spacing between start points
     # Returns:
     # - List of traced horizons
-    # """
+    # 
     horizons = []
     H, W = radargram.shape
     
