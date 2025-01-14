@@ -150,10 +150,10 @@ def generate_random_slices(data_dir_masks, data_dir_radargrams,
 
 # Example usage
 data_dir_masks = "../DATA/masks/"
-data_dir_radargrams = "../DATA/masks/"
+data_dir_radargrams = "../DATA/grams/"
 
-output_dir_masks = "./masks_64_64/"
-output_dir_radargrams = "./grams_64_64/"
+output_dir_masks = "./d_masks_64_64/"
+output_dir_radargrams = "./d_grams_64_64/"
 
 
 ### choosing 2 patches to make 5 smaller patches from and save them

@@ -18,18 +18,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-## -- making small dataset
-"""
-## ---- gettting small data
-mask_slice = "../DATA/grams/20023150_patch_84.csv"
-m = np.loadtxt(mask_slice, delimiter = ",")
-m = m[300:364, 300:364]
-plt.imshow(m)
-# 84 -->> plt.imshow(m[300:364, 300:364])
-# 25 -->> plt.imshow(m[300:364, 140:204])
-np.savetxt("gram_20023150_84.csv", m, delimiter=",")
-"""
-
 
 ## ---- Traversal Logic
 
@@ -123,7 +111,7 @@ def process_patch(filepath):
 
 
 ## -- Example usage
-filepath = "./masks/20023150_84.csv"
+filepath = "./d_masks_64_64/20023150_patch_147_patch_2.csv"
 irh_traversals = process_patch(filepath)
 
 ## -- Print traversal for each IRH
@@ -281,7 +269,7 @@ def generate_training_data(radargram_path, mask_path, increment_size=5, samples_
     Parameters:
     - radargram_path: path to the radargram file
     - mask_path: path to the mask file
-    - increment_size: how many pixels to increment by when creating partial masks
+    - increment_size: how many pixels to increment by, when creating partial masks
     - samples_per_irh: how many different training samples to generate per IRH
     """
     radargram, mask = load_radargram_and_mask(radargram_path, mask_path)
@@ -304,6 +292,7 @@ def generate_training_data(radargram_path, mask_path, increment_size=5, samples_
             print(f"Training sample {counter} generated")
     
     return training_samples
+
 
 
 
@@ -361,6 +350,90 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     
     return dataset
+
+
+
+#%% ------ VISUALIZING
+
+
+
+def visualize_samples(tf_dataset, num_samples=5):
+    """
+    Visualize radargrams and their corresponding masks side by side.
+
+    Parameters:
+    - tf_dataset: A TensorFlow dataset containing radargram and mask pairs.
+    - num_samples: Number of samples to visualize.
+    """
+    samples_shown = 0  # Counter to track the number of samples shown
+
+    # Iterate through batches in the dataset
+    for radargrams, (masks, _) in tf_dataset:
+        radargrams = radargrams.numpy()
+        masks = masks.numpy()
+
+        # Iterate over each sample in the batch
+        for radargram, mask in zip(radargrams, masks):
+            if samples_shown >= num_samples:
+                return  # Stop after showing the required number of samples
+
+            # Remove the channel dimension for visualization
+            radargram = radargram.squeeze(axis=-1)
+            mask = mask.squeeze(axis=-1)
+
+            # Plot radargram and mask
+            plt.figure(figsize=(10, 4))
+
+            # Radargram
+            plt.subplot(1, 2, 1)
+            plt.imshow(radargram, cmap="gray")
+            plt.title("Radargram")
+            plt.axis("off")
+
+            # Mask
+            plt.subplot(1, 2, 2)
+            plt.imshow(mask, cmap="gray")
+            plt.title("Mask")
+            plt.axis("off")
+
+            # Show the plot
+            plt.tight_layout()
+            plt.show()
+
+            samples_shown += 1
+
+# Assuming the TensorFlow dataset is created with your function:
+radargram_dir = "./d_grams_64_64/"
+mask_dir = "./d_masks_64_64/"
+batch_size = 4
+
+
+# Create the dataset
+tf_dataset = create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=batch_size)
+
+# Visualize samples
+visualize_samples(tf_dataset, num_samples=40)
+
+
+
+
+def count_total_samples(tf_dataset):
+    """
+    Count the total number of samples in a TensorFlow dataset.
+    
+    Parameters:
+    - tf_dataset: A TensorFlow dataset.
+    
+    Returns:
+    - Total number of samples.
+    """
+    total_samples = 0
+    for batch in tf_dataset:
+        batch_size = batch[0].shape[0]  # Get the batch size
+        total_samples += batch_size
+    return total_samples
+
+
 
 
 
@@ -456,7 +529,7 @@ def custom_softmax_loss(y_true, y_pred):
 
 
 ## -- total number of traing samples
-sample_count = sum(1 for _ in create_tf_data_pipeline(radargram_dir='./grams/', mask_dir='./masks/', batch_size=4))
+sample_count = sum(1 for _ in create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', mask_dir='./d_masks_64_64/', batch_size=4))
 print(f"Total training samples: {sample_count}")
 # print(f"Training sample {counter} generated from file {radargram_path}, IRH {irh_label}")
 
@@ -486,9 +559,15 @@ total_samples = 0
 batch_count = 0
 
 ## -- dynamically generate the data (Create dataset)
-train_data = create_tf_data_pipeline(radargram_dir='./grams/', 
-                                   mask_dir='./masks/', 
+train_data = create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', 
+                                   mask_dir='./d_masks_64_64/', 
                                    batch_size=4)
+
+
+## -- to see the number of training data (Count the total number of samples in your training dataset)
+total_samples = count_total_samples(train_data)
+print(f"Total number of training samples: {total_samples}")
+
 
 # Debug: Test a single batch
 for inputs, (mask, term) in train_data.take(1):
