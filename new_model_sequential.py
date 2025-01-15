@@ -542,16 +542,15 @@ print(f"Total training samples: {sample_count}")
 model = unet_model(input_shape=(64, 64, 1))
 
 
-# Debug: Count total samples
-total_samples = 0
-batch_count = 0
-
-
 ## -- dynamically generate the data (Create dataset)
 train_data = create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', 
                                    mask_dir='./d_masks_64_64/', 
                                    batch_size=4)
 
+
+# Debug: Count total samples
+total_samples = 0
+batch_count = 0
 
 ## -- to see the number of training data (Count the total number of samples in your training dataset)
 total_samples = count_total_samples(train_data)
@@ -647,7 +646,7 @@ reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
 history = model.fit(
     train_data,
     #validation_data=val_dataset,
-    epochs=60,
+    epochs=80,
     verbose=1,
     callbacks=[early_stopping, model_checkpoint, reduce_lr]
 )
@@ -674,7 +673,6 @@ plt.title('Model Accuracy')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.legend()
-
 plt.tight_layout()
 plt.show()
 
