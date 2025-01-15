@@ -126,7 +126,7 @@ for i, traversal in enumerate(irh_traversals, start=1):
 
 #%%
 
-"""
+
 
 ## --- VISUALIZATION OF THE TRAVERSAL
 
@@ -141,6 +141,7 @@ from matplotlib.animation import FuncAnimation
 # Load mask and process (reuse previous functions)
 filepath = "../DATA/masks/20023150_patch_25.csv"
 mask = np.loadtxt(filepath, delimiter=',', dtype=int)
+gram = np.loadtxt("../DATA/grams/20023150_patch_25.csv", delimiter=',', dtype=int)
 
 def visualize_traversal(mask, traversal):
     
@@ -149,8 +150,10 @@ def visualize_traversal(mask, traversal):
     plt.figure(figsize=(12,12))
     plt.imshow(mask, cmap='gray')  # Display the mask
     for i, point in enumerate(traversal):
+        
         plt.scatter(point[1], point[0], color='red', s=10)  # Plot traversal point
         plt.title(f"Step {i + 1}: Point {point}")
+        plt.imshow(gram)
         plt.pause(0.01)  # Pause to create animation effect
     plt.show()
 
@@ -182,7 +185,7 @@ sequence = np.array(sequence)
 # Visualize the traversal
 visualize_traversal(mask, sequence)
 
-"""
+
 
 
 
@@ -262,7 +265,7 @@ def load_radargram_and_mask(radargram_path, mask_path):
     mask = load_mask(mask_path)
     return radargram, mask
 
-def generate_training_data(radargram_path, mask_path, increment_size=5, samples_per_irh=20):
+def generate_training_data(radargram_path, mask_path, increment_size=1, samples_per_irh=30):
     """
     Generate training samples from a radargram and mask.
     
@@ -306,7 +309,7 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
             radargram_path = os.path.join(radargram_dir, radargram_file)
             mask_path = os.path.join(mask_dir, radargram_file)
 
-            training_samples = generate_training_data(radargram_path, mask_path, samples_per_irh=20)
+            training_samples = generate_training_data(radargram_path, mask_path, samples_per_irh=40)
             
             for radargram, mask in training_samples:
                 # Convert to float32 and add channel dimension
@@ -528,35 +531,21 @@ def custom_softmax_loss(y_true, y_pred):
 #%%
 
 
+
 ## -- total number of traing samples
 sample_count = sum(1 for _ in create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', mask_dir='./d_masks_64_64/', batch_size=4))
 print(f"Total training samples: {sample_count}")
 # print(f"Training sample {counter} generated from file {radargram_path}, IRH {irh_label}")
 
 
-
-
-# 5. Optional: Add learning rate scheduler
-initial_learning_rate = 0.001
-decay_steps = 1000
-decay_rate = 0.9
-
-lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-    initial_learning_rate,
-    decay_steps=decay_steps,
-    decay_rate=decay_rate
-)
-
-
 ##-- Define the model
 model = unet_model(input_shape=(64, 64, 1))
-
-
 
 
 # Debug: Count total samples
 total_samples = 0
 batch_count = 0
+
 
 ## -- dynamically generate the data (Create dataset)
 train_data = create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', 
@@ -593,33 +582,24 @@ print(f"Total samples: {total_samples}")
 
 ## -- training block
 
-# 1. Add callbacks for better training control and monitoring
-early_stopping = tf.keras.callbacks.EarlyStopping(
-    monitor='val_loss',  # Monitor validation loss instead of training loss
-    patience=10,
-    restore_best_weights=True,
-    verbose=1
-)
-
-model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
-    filepath='best_model.keras',
-    monitor='val_loss',  # Monitor validation loss instead of training loss
-    save_best_only=True,
-    verbose=1
-)
-
-reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-    monitor='val_loss',  # Monitor validation loss instead of training loss
-    factor=0.5,
-    patience=5,
-    min_lr=1e-6,
-    verbose=1
-)
-
+"""
 # 2. Split data into training and validation sets
 train_size = int(0.8 * total_samples)  # 80% for training
 train_dataset = train_data.take(train_size)
 val_dataset = train_data.skip(train_size)
+"""
+
+## -- Optional: Add learning rate scheduler
+initial_learning_rate = 0.001
+decay_steps = 1000
+decay_rate = 0.9
+
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate,
+    decay_steps=decay_steps,
+    decay_rate=decay_rate
+)
+
 
 # 3. Compile the model (ensure loss and metrics are defined)
 model.compile(
@@ -634,57 +614,46 @@ model.compile(
     }
 )
 
-# 4. Enhanced training call
-history = model.fit(
-    train_dataset,
-    validation_data=val_dataset,
-    epochs=100,
-    verbose=1,
-    callbacks=[early_stopping, model_checkpoint, reduce_lr]
+
+# 1. Add callbacks for better training control and monitoring
+early_stopping = tf.keras.callbacks.EarlyStopping(
+    monitor='val_loss',  # Monitor validation loss instead of training loss
+    patience=10,
+    restore_best_weights=True,
+    verbose=1
 )
 
 
-
-
-###############################################################################
-
-## -- old train data
-#
-
-# Update model compilation to use the custom loss
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
-    loss={
-        'irh_output': 'binary_crossentropy',
-        'terminate_output': 'binary_crossentropy',
-    },
-    metrics={
-        'irh_output': ['accuracy'],
-        'terminate_output': ['accuracy'],
-    }
-)
-
- 
 # Add the checkpoint callback
 model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
     filepath='best_model.keras',
-    monitor='loss',
+    monitor='loss',  # Monitor validation loss instead of training loss
     save_best_only=True,
     verbose=1
 )
 
 
-# Train the model
-history = model.fit(
-    train_data,
-    epochs=80,
-    verbose=1,
-    callbacks=[model_checkpoint]
+reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+    monitor='loss',  # Monitor validation loss instead of training loss
+    factor=0.5,
+    patience=5,
+    min_lr=1e-6,
+    verbose=1
 )
 
 
+#######################
+## -- train the model
+history = model.fit(
+    train_data,
+    #validation_data=val_dataset,
+    epochs=60,
+    verbose=1,
+    callbacks=[early_stopping, model_checkpoint, reduce_lr]
+)
+
 # Save the trained model
-model.save('trained_model.keras')
+model.save('trained_model_more_data.keras')
 
 
 
@@ -693,7 +662,7 @@ model.save('trained_model.keras')
 plt.figure(figsize=(12, 4))
 # Plot loss
 plt.subplot(1, 2, 1)
-plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['loss'], "-*", label='Training Loss')
 plt.title('Model Loss')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
@@ -723,7 +692,7 @@ plt.show()
 from tensorflow.keras.models import load_model
 
 # Load the saved model
-saved_model = load_model('trained_model.keras')
+saved_model = load_model('trained_model_more_data.keras')
 
 
 gram_piece = np.loadtxt("../DATA/grams/20023150_patch_16.csv", delimiter = ",")
@@ -768,217 +737,6 @@ plt.tight_layout()
 
 ## -----------------------------------------------------------------------
 ## -- NEW PREDICTION (ITERATIVELY)
-
-
-import numpy as np
-import tensorflow as tf
-
-
-
-def trace_horizon(model, radargram, start_pixel, max_steps=100, terminate_threshold=0.9):
-    """
-    Traces a single horizon in a radargram using an iterative process.
-    Args:
-    - model: Trained model with irh prediction and termination outputs
-    - radargram: Input radargram as a numpy array of shape (H, W)
-    - start_pixel: Tuple (x, y) indicating the starting pixel
-    - max_steps: Maximum number of iterations for tracing
-    - terminate_threshold: Termination signal threshold
-    Returns:
-    - horizon: List of traced pixels [(x1, y1), (x2, y2), ...]
-    """
-    current_pixel = start_pixel
-    horizon = [current_pixel]  # Initialize the horizon with the start pixel
-    H, W = radargram.shape
-    
-    for step in range(max_steps):
-        # Prepare the input for the model
-        input_data = prepare_input(radargram, horizon, H, W)
-        
-        # Make predictions - model returns a list of outputs
-        predictions = model.predict(input_data)
-        
-        # First output is irh_output, second is terminate_output
-        irh_output = predictions[0].squeeze()  # Remove batch dimension
-        terminate_output = predictions[1].squeeze()  # Remove batch dimension
-        
-        # Handle termination output
-        if np.ndim(terminate_output) > 0:  # If terminate_output is a map
-            terminate_prob = terminate_output.max()  # Use the maximum value
-        else:
-            terminate_prob = float(terminate_output)  # Convert to float if scalar
-            
-        # Check for termination
-        if terminate_prob >= terminate_threshold:
-            print(f"Terminated after {step + 1} steps at pixel {current_pixel}")
-            break
-            
-        # Find the next pixel (highest probability in irh_output)
-        next_pixel = np.unravel_index(np.argmax(irh_output), (H, W))
-        
-        # Validate the next pixel
-        if (
-            next_pixel in horizon or  # Already visited
-            not (0 <= next_pixel[0] < H and 0 <= next_pixel[1] < W)  # Out of bounds
-        ):
-            print(f"Stopped due to invalid next pixel: {next_pixel}")
-            break
-            
-        # Add the predicted pixel to the list
-        horizon.append(next_pixel)
-        current_pixel = next_pixel
-        
-    return horizon
-
-
-
-def prepare_input(radargram, horizon, H, W):
-    """
-    Prepares input data for the model with encoded horizon pixels.
-    Args:
-    - radargram: Input radargram of shape (H, W)
-    - horizon: List of traced pixels [(x1, y1), (x2, y2), ...]
-    - H, W: Dimensions of the radargram
-    Returns:
-    - input_data: Model-ready input of shape (1, H, W, 1)
-    """
-    # Create a copy of the radargram to avoid modifying the original
-    input_data = radargram.copy()
-    
-    # Create a mask for the horizon
-    horizon_mask = np.zeros_like(input_data)
-    for x, y in horizon:
-        horizon_mask[x, y] = 1.0  # Highlight horizon pixels
-    
-    # Stack the original radargram and horizon mask
-    input_data = np.stack([input_data, horizon_mask], axis=-1)
-    
-    return np.expand_dims(input_data, axis=0)  # Add batch dimension
-
-
-
-import numpy as np
-import tensorflow as tf
-
-# First define the two functions (trace_horizon and prepare_input) from earlier
-
-# Now let's trace horizons from your chosen starting points
-model = tf.keras.models.load_model('trained_model.keras')
-radargram = gram_piece_small
-
-# Define your starting points as (row, column) coordinates
-starting_points = [
-    (12, 0),  # first starting point
-    (25, 0),  # second starting point
-    (40, 0)   # third starting point
-]
-
-# Trace horizons from each starting point
-traced_horizons = []
-for start_point in starting_points:
-    horizon = trace_horizon(model, radargram, start_point, 
-                          max_steps=100,    # adjust based on your image width
-                          terminate_threshold=0.9)  # adjust if needed
-    traced_horizons.append(horizon)
-    print(f"Completed tracing horizon from starting point {start_point}")
-
-# Now traced_horizons is a list where each element is a list of points for one horizon
-
-
-
-
-
-
-
-
-
-
-
-
-"""
-
-
-# Example usage:
-def trace_full_image(model, radargram, start_row=0, step_size=10):
-    #   
-    # Traces horizons across the full image starting from multiple points.
-    # Args:
-    # - model: Trained model
-    # - radargram: Input radargram
-    # - start_row: Row to start tracing from
-    # - step_size: Horizontal spacing between start points
-    # Returns:
-    # - List of traced horizons
-    # 
-    horizons = []
-    H, W = radargram.shape
-    
-    # Generate starting points across the image
-    for col in range(0, W, step_size):
-        start_pixel = (start_row, col)
-        horizon = trace_horizon(model, radargram, start_pixel)
-        horizons.append(horizon)
-    
-    return horizons
-
-"""
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
