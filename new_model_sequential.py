@@ -130,7 +130,7 @@ for i, traversal in enumerate(irh_traversals, start=1):
 
 ## --- VISUALIZATION OF THE TRAVERSAL
 
-
+"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -185,7 +185,7 @@ sequence = np.array(sequence)
 # Visualize the traversal
 visualize_traversal(mask, sequence)
 
-
+"""
 
 
 
@@ -207,7 +207,7 @@ from skimage.measure import label
 from scipy.spatial import cKDTree
 
 
-def generate_incremental_masks(mask, irh_label, increment_size=5):
+def generate_incremental_masks(mask, irh_label, increment_size=1):
     """
     Generate incremental masks for a single IRH.
     
@@ -265,43 +265,59 @@ def load_radargram_and_mask(radargram_path, mask_path):
     mask = load_mask(mask_path)
     return radargram, mask
 
-def generate_training_data(radargram_path, mask_path, increment_size=1, samples_per_irh=30):
+def generate_training_data(
+    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=30):
     """
     Generate training samples from a radargram and mask.
-    
+
     Parameters:
     - radargram_path: path to the radargram file
     - mask_path: path to the mask file
     - increment_size: how many pixels to increment by, when creating partial masks
-    - samples_per_irh: how many different training samples to generate per IRH
+    - enforce_zero_mask_ratio: ensure 1 out of every `enforce_zero_mask_ratio` masks is all-zero
+    - samples_per_irh: how many different training samples to generate per IRH (must be passed explicitly)
     """
+    # if samples_per_irh is None:
+    #     raise ValueError("samples_per_irh must be provided by the calling function.")
+
     radargram, mask = load_radargram_and_mask(radargram_path, mask_path)
-    
     labeled_mask = separate_irhs(mask)
     irh_labels = np.unique(labeled_mask)[1:]  # Exclude background (0 label)
     
     training_samples = []
     counter = 0
-    
+
     for irh_label in irh_labels:
         # Generate incremental masks with specified increment size
         incremental_masks = generate_incremental_masks(mask, irh_label, increment_size)
         
-        # Take the specified number of samples from these masks
-        for _ in range(samples_per_irh):
-            random_mask = random.choice(incremental_masks)
-            training_samples.append((radargram, random_mask))
-            counter += 1
-            print(f"Training sample {counter} generated")
+        # Ensure 1 out of every `enforce_zero_mask_ratio` samples is an all-zero mask
+        zero_mask_interval = enforce_zero_mask_ratio
+        for i in range(samples_per_irh):
+            if (i + 1) % zero_mask_interval == 0:
+                zero_mask = np.zeros_like(mask)
+                training_samples.append((radargram, zero_mask))
+                counter += 1
+                print(f"Training sample {counter} generated (all-zero mask)")
+            else:
+                random_mask = random.choice(incremental_masks)
+                training_samples.append((radargram, random_mask))
+                counter += 1
+                print(f"Training sample {counter} generated")
     
     return training_samples
 
 
+def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size):
+    """
+    Create TensorFlow data pipeline from the radargram and mask files.
 
-
-def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
-    """Create TensorFlow data pipeline from the radargram and mask files."""
-
+    Parameters:
+    - radargram_dir: directory containing radargram files
+    - mask_dir: directory containing mask files
+    - samples_per_irh: how many different training samples to generate per IRH
+    - batch_size: number of samples per batch
+    """
     dataset = []
     
     for radargram_file in sorted(os.listdir(radargram_dir)):
@@ -309,7 +325,10 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
             radargram_path = os.path.join(radargram_dir, radargram_file)
             mask_path = os.path.join(mask_dir, radargram_file)
 
-            training_samples = generate_training_data(radargram_path, mask_path, samples_per_irh=40)
+            # Pass samples_per_irh directly to generate_training_data
+            training_samples = generate_training_data(
+                radargram_path, mask_path, samples_per_irh=samples_per_irh
+            )
             
             for radargram, mask in training_samples:
                 # Convert to float32 and add channel dimension
@@ -321,13 +340,13 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
                 output_tuple = (mask, termination_mask)
                 dataset.append((radargram, output_tuple))
     
+
     
-    
+   
     def generator():
         for radargram, (mask, term) in dataset:
-            # Ensure we yield with the correct nested structure
             yield (radargram, (mask, term))
-
+    
     return tf.data.Dataset.from_generator(
         generator,
         output_signature=(
@@ -353,88 +372,6 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=4):
     dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
     
     return dataset
-
-
-
-#%% ------ VISUALIZING
-
-
-
-def visualize_samples(tf_dataset, num_samples=5):
-    """
-    Visualize radargrams and their corresponding masks side by side.
-
-    Parameters:
-    - tf_dataset: A TensorFlow dataset containing radargram and mask pairs.
-    - num_samples: Number of samples to visualize.
-    """
-    samples_shown = 0  # Counter to track the number of samples shown
-
-    # Iterate through batches in the dataset
-    for radargrams, (masks, _) in tf_dataset:
-        radargrams = radargrams.numpy()
-        masks = masks.numpy()
-
-        # Iterate over each sample in the batch
-        for radargram, mask in zip(radargrams, masks):
-            if samples_shown >= num_samples:
-                return  # Stop after showing the required number of samples
-
-            # Remove the channel dimension for visualization
-            radargram = radargram.squeeze(axis=-1)
-            mask = mask.squeeze(axis=-1)
-
-            # Plot radargram and mask
-            plt.figure(figsize=(10, 4))
-
-            # Radargram
-            plt.subplot(1, 2, 1)
-            plt.imshow(radargram, cmap="gray")
-            plt.title("Radargram")
-            plt.axis("off")
-
-            # Mask
-            plt.subplot(1, 2, 2)
-            plt.imshow(mask, cmap="gray")
-            plt.title("Mask")
-            plt.axis("off")
-
-            # Show the plot
-            plt.tight_layout()
-            plt.show()
-
-            samples_shown += 1
-
-# Assuming the TensorFlow dataset is created with your function:
-radargram_dir = "./d_grams_64_64/"
-mask_dir = "./d_masks_64_64/"
-batch_size = 4
-
-
-# Create the dataset
-tf_dataset = create_tf_data_pipeline(radargram_dir, mask_dir, batch_size=batch_size)
-
-# Visualize samples
-visualize_samples(tf_dataset, num_samples=40)
-
-
-
-
-def count_total_samples(tf_dataset):
-    """
-    Count the total number of samples in a TensorFlow dataset.
-    
-    Parameters:
-    - tf_dataset: A TensorFlow dataset.
-    
-    Returns:
-    - Total number of samples.
-    """
-    total_samples = 0
-    for batch in tf_dataset:
-        batch_size = batch[0].shape[0]  # Get the batch size
-        total_samples += batch_size
-    return total_samples
 
 
 
@@ -528,45 +465,189 @@ def custom_softmax_loss(y_true, y_pred):
 
 
 
-#%%
+#%% U-NET WITH 2 INPUTS
+
+
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+def unet_model_with_two_inputs(input_shape=(64, 64, 1)):
+    """Defines a U-Net for 64x64 input patches with two inputs."""
+    # First input: radargram
+    radargram_input = layers.Input(shape=input_shape, name='radargram_input')
+
+    # Second input: additional data
+    additional_input = layers.Input(shape=input_shape, name='additional_input')
+
+    # Combine inputs
+    combined_input = layers.Concatenate()([radargram_input, additional_input])
+
+    # Encoder (downsampling)
+    x1 = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(combined_input)
+    x1_pool = layers.MaxPooling2D((2, 2))(x1)
+
+    x2 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x1_pool)
+    x2_pool = layers.MaxPooling2D((2, 2))(x2)
+
+    x3 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x2_pool)
+    x3_pool = layers.MaxPooling2D((2, 2))(x3)
+
+    # Bottleneck
+    x4 = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(x3_pool)
+
+    # Decoder (upsampling)
+    x5 = layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same')(x4)
+    x5 = layers.Concatenate()([x5, x3])  # Skip connection
+
+    x6 = layers.Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same')(x5)
+    x6 = layers.Concatenate()([x6, x2])  # Skip connection
+
+    x7 = layers.Conv2DTranspose(32, (3, 3), strides=(2, 2), padding='same')(x6)
+    x7 = layers.Concatenate()([x7, x1])  # Skip connection
+
+    # Output layers
+    irh_output = layers.Conv2D(1, (1, 1), activation='sigmoid', name='irh_output')(x7)  # IRH mask prediction
+    terminate_output = layers.Conv2D(1, (1, 1), activation='sigmoid', name='terminate_output')(x7)  # Termination prediction
+
+    # Define the model with two inputs
+    model = models.Model(inputs=[radargram_input, additional_input], outputs=[irh_output, terminate_output])
+    return model
 
 
 
-## -- total number of traing samples
-sample_count = sum(1 for _ in create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', mask_dir='./d_masks_64_64/', batch_size=4))
-print(f"Total training samples: {sample_count}")
-# print(f"Training sample {counter} generated from file {radargram_path}, IRH {irh_label}")
+
+#%% ------ VISUALIZING
+
+
+def visualize_samples(tf_dataset, num_samples=5):
+    """
+    Visualize radargrams and their corresponding masks side by side.
+
+    Parameters:
+    - tf_dataset: A TensorFlow dataset containing radargram and mask pairs.
+    - num_samples: Number of samples to visualize.
+    """
+    samples_shown = 0  # Counter to track the number of samples shown
+
+    # Iterate through batches in the dataset
+    for radargrams, (masks, _) in tf_dataset:
+        radargrams = radargrams.numpy()
+        masks = masks.numpy()
+
+        # Iterate over each sample in the batch
+        for radargram, mask in zip(radargrams, masks):
+            if samples_shown >= num_samples:
+                return  # Stop after showing the required number of samples
+
+            # Remove the channel dimension for visualization
+            radargram = radargram.squeeze(axis=-1)
+            mask = mask.squeeze(axis=-1)
+
+            # Plot radargram and mask
+            plt.figure(figsize=(10, 4))
+
+            # Radargram
+            plt.subplot(1, 2, 1)
+            plt.imshow(radargram, cmap="gray")
+            plt.title("Radargram")
+            plt.axis("off")
+
+            # Mask
+            plt.subplot(1, 2, 2)
+            plt.imshow(mask, cmap="gray")
+            plt.title("Mask")
+            plt.axis("off")
+
+            # Show the plot
+            plt.tight_layout()
+            plt.show()
+
+            samples_shown += 1
+
+
+
+#%% Create the dataset
+
+
+
+radargram_dir = "./d_grams_64_64/"
+mask_dir = "./d_masks_64_64/"
+
+# Define the number of samples per IRH and batch size
+batch_size = 32
+samples_per_irh = 40
+
+##           create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size):
+
+tf_dataset = create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size)
+
+## -- shuffling the dataset globally
+buffer_size = 1000  # Adjust based on your dataset size for effective shuffling
+tf_dataset = tf_dataset.shuffle(buffer_size, reshuffle_each_iteration=True)
+# True, reshuffles the dataset for every epoch, ensuring better randomness across training epochs.
+print(f"type of dataset is {type(tf_dataset)}")
+
+# Visualize samples
+visualize_samples(tf_dataset, num_samples=40)
+
 
 
 ##-- Define the model
 model = unet_model(input_shape=(64, 64, 1))
 
 
+
+##-- Define the model
+model = unet_model_with_two_inputs(input_shape=(64, 64, 1))
+
+
+
+
+#%%
+
+
+## -- total number of traing samples
+sample_count = sum(1 for _ in tf_dataset)
+print(f"Total training samples: {sample_count}")
+# print(f"Training sample {counter} generated from file {radargram_path}, IRH {irh_label}")
+
+
+def count_total_samples(tf_dataset):
+    """
+    Count the total number of samples in a TensorFlow dataset.
+    
+    Parameters:
+    - tf_dataset: A TensorFlow dataset.
+    
+    Returns:
+    - Total number of samples.
+    """
+    total_samples = 0
+    for batch in tf_dataset:
+        batch_size = batch[0].shape[0]  # Get the batch size
+        total_samples += batch_size
+    return total_samples
+
+
+
 # Debug: Count total samples
 total_samples = 0
 batch_count = 0
 
-
-## -- dynamically generate the data (Create dataset)
-train_data = create_tf_data_pipeline(radargram_dir='./d_grams_64_64/', 
-                                   mask_dir='./d_masks_64_64/', 
-                                   batch_size=4)
-
-
 ## -- to see the number of training data (Count the total number of samples in your training dataset)
-total_samples = count_total_samples(train_data)
+total_samples = count_total_samples(tf_dataset)
 print(f"Total number of training samples: {total_samples}")
 
 
 # Debug: Test a single batch
-for inputs, (mask, term) in train_data.take(1):
+for inputs, (mask, term) in tf_dataset.take(1):
     print("Input shape:", inputs.shape)
     print("Mask shape:", mask.shape)
     print("Termination shape:", term.shape)
     break
 
 # Count samples in each batch
-for batch_x, (batch_mask, batch_term) in train_data:
+for batch_x, (batch_mask, batch_term) in tf_dataset:
     batch_count += 1
     samples_in_batch = batch_x.shape[0]  # Should be 4 (or less for last batch)
     total_samples += samples_in_batch
@@ -585,8 +666,8 @@ print(f"Total samples: {total_samples}")
 """
 # 2. Split data into training and validation sets
 train_size = int(0.8 * total_samples)  # 80% for training
-train_dataset = train_data.take(train_size)
-val_dataset = train_data.skip(train_size)
+tf_dataset = tf_dataset.take(train_size)
+val_dataset = tf_dataset.skip(train_size)
 """
 
 ## -- Optional: Add learning rate scheduler
@@ -642,19 +723,19 @@ reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
 )
 
 
-#######################
+################################## +++++++++++++++++++++++ ----------------....
 ## -- train the model
 history = model.fit(
-    train_data,
+    tf_dataset,
     #validation_data=val_dataset,
-    epochs=60,
+    epochs=80,
     verbose=1,
-    callbacks=[early_stopping, model_checkpoint, reduce_lr]
+    callbacks=[early_stopping, model_checkpoint]
 )
 
 # Save the trained model
-model.save('trained_model_more_data.keras')
-
+model.save('trained_model_more_data_emptymask_2_inputs.keras')
+################################# ++++++++++++++++++++++++ ----------------....
 
 
 
@@ -669,74 +750,34 @@ plt.ylabel('Loss')
 plt.legend()
 # Plot accuracy
 plt.subplot(1, 2, 2)
-plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['irh_output_accuracy'], label='Training Accuracy')
 plt.title('Model Accuracy')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
 plt.legend()
-
 plt.tight_layout()
 plt.show()
-
-
-
-
-
 
 
 #%%
 
 
-## -- OLD PRWEDICITON WITH THEM 
-
-from tensorflow.keras.models import load_model
-
-# Load the saved model
-saved_model = load_model('trained_model_more_data.keras')
 
 
-gram_piece = np.loadtxt("../DATA/grams/20023150_patch_16.csv", delimiter = ",")
-mask_piece = np.loadtxt("../DATA/masks/20023150_patch_16.csv", delimiter = ",")
-
-n = random.randrange(0,448)
-m = n + 64
-
-gram_piece_small = gram_piece[n:m, n:m]
-mask_piece_smal = mask_piece [n:m, n:m]
-
-input_data = gram_piece_small.reshape(1, 64, 64, 1)
-
-predictions = saved_model.predict(input_data)
-
-predicted_irh = predictions[0]
-predicted_irh =  normalize_matrix(predicted_irh, 0, 1)
-prediction_stopping = predictions[1]
-prediction_stopping = normalize_matrix(prediction_stopping , 0, 1)
-
-print(f"the random number for the patch is {n} and second one {m}")
 
 
-plt.figure(figsize=(10,10))
-plt.subplot(221)
-plt.title("radargram")
-plt.imshow(gram_piece_small)
-plt.subplot(222)
-plt.title("mask")
-plt.imshow(mask_piece_smal)
-plt.subplot(223)
-plt.title("output - predicted horizon")
-plt.imshow(predicted_irh[0,:,:,0])
-plt.subplot(224)
-plt.title("ouput - prediction stopping")
-plt.imshow(prediction_stopping[0,:,:,0])
-plt.tight_layout()
 
 
-# plt.savefig("./res_3_BC.png")
 
 
-## -----------------------------------------------------------------------
-## -- NEW PREDICTION (ITERATIVELY)
+
+
+
+
+
+
+
+
 
 
 

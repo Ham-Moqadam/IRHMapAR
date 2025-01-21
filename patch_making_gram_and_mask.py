@@ -140,7 +140,6 @@ def generate_random_slices(data_dir_masks, data_dir_radargrams,
         print(f"An error occurred: {e}")
 
 
-
 #%%
         
 ### ---------------------------------------------------------------------------        
@@ -157,7 +156,10 @@ output_dir_radargrams = "./d_grams_64_64/"
 
 
 ### choosing 2 patches to make 5 smaller patches from and save them
-profile_names = ["20023150_patch_16", "20023150_patch_147"]
+profile_names = ["20023150_patch_16", 
+                 "20023150_patch_147", 
+                 "20023150_patch_25", 
+                 "20023150_patch_91"]
 num_patches = 5
 patch_size = (64,64)
 display_time = 2
