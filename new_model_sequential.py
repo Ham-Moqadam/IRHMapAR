@@ -465,56 +465,6 @@ def custom_softmax_loss(y_true, y_pred):
 
 
 
-#%% U-NET WITH 2 INPUTS
-
-
-import tensorflow as tf
-from tensorflow.keras import layers, models
-
-def unet_model_with_two_inputs(input_shape=(64, 64, 1)):
-    """Defines a U-Net for 64x64 input patches with two inputs."""
-    # First input: radargram
-    radargram_input = layers.Input(shape=input_shape, name='radargram_input')
-
-    # Second input: additional data
-    additional_input = layers.Input(shape=input_shape, name='additional_input')
-
-    # Combine inputs
-    combined_input = layers.Concatenate()([radargram_input, additional_input])
-
-    # Encoder (downsampling)
-    x1 = layers.Conv2D(32, (3, 3), activation='relu', padding='same')(combined_input)
-    x1_pool = layers.MaxPooling2D((2, 2))(x1)
-
-    x2 = layers.Conv2D(64, (3, 3), activation='relu', padding='same')(x1_pool)
-    x2_pool = layers.MaxPooling2D((2, 2))(x2)
-
-    x3 = layers.Conv2D(128, (3, 3), activation='relu', padding='same')(x2_pool)
-    x3_pool = layers.MaxPooling2D((2, 2))(x3)
-
-    # Bottleneck
-    x4 = layers.Conv2D(256, (3, 3), activation='relu', padding='same')(x3_pool)
-
-    # Decoder (upsampling)
-    x5 = layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same')(x4)
-    x5 = layers.Concatenate()([x5, x3])  # Skip connection
-
-    x6 = layers.Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same')(x5)
-    x6 = layers.Concatenate()([x6, x2])  # Skip connection
-
-    x7 = layers.Conv2DTranspose(32, (3, 3), strides=(2, 2), padding='same')(x6)
-    x7 = layers.Concatenate()([x7, x1])  # Skip connection
-
-    # Output layers
-    irh_output = layers.Conv2D(1, (1, 1), activation='sigmoid', name='irh_output')(x7)  # IRH mask prediction
-    terminate_output = layers.Conv2D(1, (1, 1), activation='sigmoid', name='terminate_output')(x7)  # Termination prediction
-
-    # Define the model with two inputs
-    model = models.Model(inputs=[radargram_input, additional_input], outputs=[irh_output, terminate_output])
-    return model
-
-
-
 
 #%% ------ VISUALIZING
 
@@ -597,8 +547,6 @@ model = unet_model(input_shape=(64, 64, 1))
 
 
 
-##-- Define the model
-model = unet_model_with_two_inputs(input_shape=(64, 64, 1))
 
 
 
@@ -734,7 +682,7 @@ history = model.fit(
 )
 
 # Save the trained model
-model.save('trained_model_more_data_emptymask_2_inputs.keras')
+model.save('trained_model_more_data_emptymask.keras')
 ################################# ++++++++++++++++++++++++ ----------------....
 
 
