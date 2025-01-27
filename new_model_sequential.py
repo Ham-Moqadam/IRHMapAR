@@ -252,6 +252,7 @@ def generate_incremental_masks(mask, irh_label, increment_size=1):
     
     return incremental_masks
 
+
 #%%
 
 ## --- integrate incremental mask generation into the training data pipeline
@@ -642,6 +643,11 @@ model.compile(
         'terminate_output': ['accuracy'],
     }
 )
+
+
+# Print the model summary
+model.summary()
+
 
 
 # 1. Add callbacks for better training control and monitoring
