@@ -189,45 +189,43 @@ from tensorflow.keras.layers import Input, concatenate
 from tensorflow.keras.models import Model
 import tensorflow as tf
 from tensorflow.keras import layers, models
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Conv2DTranspose, concatenate
+from tensorflow.keras.models import Model
+
 
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Conv2DTranspose, concatenate
 from tensorflow.keras.models import Model
 
-def unet_model_two_inputs(input_shape=(64, 64, 1)):
+def unet_model_one_input(input_shape=(64, 64, 1)):
     """
-    Defines a U-Net model that accepts two inputs: 
-    1. The radargram patches.
-    2. An additional input (e.g., dummy or meaningful data).
+    Defines a U-Net model that accepts one input (the radargrams) 
+    and provides two outputs: segmentation mask and termination map.
 
     Parameters:
-    - input_shape: Shape of each input (default: (64, 64, 1)).
+    - input_shape: Shape of the radargram input (default: (64, 64, 1)).
 
     Returns:
-    - A Keras model accepting two inputs.
+    - A Keras model accepting one input and providing two outputs.
     """
-    # Define the two inputs
+    # Define the single input
     radargram_input = Input(shape=input_shape, name="radargram_input")
-    additional_input = Input(shape=input_shape, name="additional_input")
     
-    # Combine the inputs (e.g., via concatenation)
-    combined_inputs = concatenate([radargram_input, additional_input], axis=-1)
+    # Pass the input into the U-Net architecture
+    x = unet_layers(radargram_input)  # The core U-Net architecture
     
-    # Pass the combined inputs into the U-Net architecture
-    x = unet_layers(combined_inputs)  # Modify unet_layers to take a tensor as input
-
     # Output layers (e.g., segmentation mask and termination map)
     mask_output = Conv2D(1, (1, 1), activation="sigmoid", name="mask_output")(x)
     termination_output = Conv2D(1, (1, 1), activation="sigmoid", name="termination_output")(x)
 
     # Create and return the model
-    model = Model(inputs=[radargram_input, additional_input], outputs=[mask_output, termination_output])
+    model = Model(inputs=radargram_input, outputs=[mask_output, termination_output])
     return model
 
 
 def unet_layers(inputs):
     """
     Defines the U-Net architecture, starting from a given tensor.
-    
+
     Parameters:
     - inputs: Input tensor.
 
@@ -260,8 +258,6 @@ def unet_layers(inputs):
     # Output tensor
     outputs = Conv2D(64, (3, 3), activation='relu', padding='same')(u1)
     return outputs
-
-
 
 
 
@@ -331,9 +327,9 @@ def load_radargram_and_mask(radargram_path, mask_path):
     radargram = np.loadtxt(radargram_path, delimiter=',', dtype=float)  
     mask = load_mask(mask_path)
     return radargram, mask
-
 def generate_training_data(
-    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=40):
+    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=40
+):
     """
     Generate training samples from a radargram and mask.
 
@@ -344,20 +340,17 @@ def generate_training_data(
     - enforce_zero_mask_ratio: ensure 1 out of every `enforce_zero_mask_ratio` masks is all-zero
     - samples_per_irh: how many different training samples to generate per IRH (must be passed explicitly)
     """
-    # if samples_per_irh is None:
-    #     raise ValueError("samples_per_irh must be provided by the calling function.")
-
     radargram, mask = load_radargram_and_mask(radargram_path, mask_path)
     labeled_mask = separate_irhs(mask)
     irh_labels = np.unique(labeled_mask)[1:]  # Exclude background (0 label)
-    
+
     training_samples = []
     counter = 0
 
     for irh_label in irh_labels:
         # Generate incremental masks with specified increment size
         incremental_masks = generate_incremental_masks(mask, irh_label, increment_size)
-        
+
         # Ensure 1 out of every `enforce_zero_mask_ratio` samples is an all-zero mask
         zero_mask_interval = enforce_zero_mask_ratio
         for i in range(samples_per_irh):
@@ -371,8 +364,9 @@ def generate_training_data(
                 training_samples.append((radargram, random_mask))
                 counter += 1
                 print(f"Training sample {counter} generated")
-    
+
     return training_samples
+
 
 
 
@@ -383,9 +377,10 @@ import tensorflow as tf
 import numpy as np
 import os
 
+
 def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size):
     dataset = []
-    
+
     for radargram_file in sorted(os.listdir(radargram_dir)):
         if radargram_file.endswith(".csv"):
             radargram_path = os.path.join(radargram_dir, radargram_file)
@@ -395,7 +390,7 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size
             training_samples = generate_training_data(
                 radargram_path, mask_path, samples_per_irh=samples_per_irh
             )
-            
+
             for radargram, mask in training_samples:
                 # Add the channel dimension and ensure float32
                 radargram = np.float32(radargram[..., np.newaxis])
@@ -403,10 +398,8 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size
                 termination_mask = np.float32(np.zeros_like(mask))  # Dummy data for second output
 
                 # Append in the required tuple structure
-                dataset.append(
-                    ((radargram, radargram), (mask, termination_mask))
-                )
-    
+                dataset.append((radargram, (mask, termination_mask)))
+
     def generator():
         for inputs, outputs in dataset:
             yield inputs, outputs
@@ -415,11 +408,8 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size
     return tf.data.Dataset.from_generator(
         generator,
         output_signature=(
-            (  # Inputs
-                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
-            ),
-            (  # Outputs
+            tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),  # Single input: radargram
+            (  # Outputs: mask and termination mask
                 tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
                 tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
             )
@@ -478,7 +468,7 @@ print(f"Total number of training samples: {total_samples}")
 
 
 ##-- Define the model
-model = unet_model_two_inputs(input_shape=(64, 64, 1))
+model = unet_model_one_input(input_shape=(64, 64, 1))
 
 
 
@@ -527,7 +517,7 @@ history = model.fit(
 )
 
 # Save the trained model
-model.save('trained_model_more_data_emptymask_2input.keras')
+model.save('28Jan_gram_input_only.keras')
 
 ####################################################################
 
