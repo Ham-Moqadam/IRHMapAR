@@ -28,6 +28,55 @@ from skimage.measure import label
 from scipy.spatial import cKDTree
 
 
+#%% loss fnctons
+
+## -- custom softmax loss / Modified Softmax Function / smoothed softmax
+
+from keras.saving import register_keras_serializable
+
+@register_keras_serializable()
+def custom_softmax_loss(y_true, y_pred):
+    """
+    Custom softmax loss function for IRH detection.
+    """
+    # Print shapes for debugging
+    print("y_true shape:", tf.shape(y_true))
+    print("y_pred shape:", tf.shape(y_pred))
+    
+    # Ensure inputs are float32
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    
+    # Apply softmax across spatial dimensions (height and width)
+    # Reshape to combine batch and channel dimensions
+    shape = tf.shape(y_pred)
+    y_pred_reshaped = tf.reshape(y_pred, [-1, shape[1] * shape[2]])
+    y_true_reshaped = tf.reshape(y_true, [-1, shape[1] * shape[2]])
+    
+    # Apply softmax
+    spatial_softmax = tf.nn.softmax(y_pred_reshaped, axis=1)
+    
+    # Calculate cross entropy loss
+    loss = tf.keras.losses.categorical_crossentropy(
+        y_true_reshaped,
+        spatial_softmax,
+        from_logits=False
+    )
+    
+    return tf.reduce_mean(loss)
+
+
+def custom_softmax_loss(y_true, y_pred):
+    logits = y_pred
+    exp_logits = tf.exp(logits)
+    probabilities = exp_logits / (tf.reduce_sum(exp_logits, axis=-1, keepdims=True) + 1.0)
+    loss = -tf.reduce_sum(y_true * tf.math.log(probabilities + 1e-7), axis=-1)
+    return tf.reduce_mean(loss)
+
+
+#%%
+
+
 def load_mask(filepath):
     """Load a binary mask from a CSV file and convert to integers."""
     mask = np.loadtxt(filepath, delimiter=',', dtype=float)  # Load as float
@@ -517,6 +566,20 @@ reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
     verbose=1
 )
 
+"""
+## -- Optional: Add learning rate scheduler
+initial_learning_rate = 0.001
+decay_steps = 1000
+decay_rate = 0.9
+
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate,
+    decay_steps=decay_steps,
+    decay_rate=decay_rate
+)
+"""
+
+
 ####################################################################
 ## -- train the model
 history = model.fit(
@@ -527,7 +590,7 @@ history = model.fit(
 )
 
 # Save the trained model
-model.save('trained_model_more_data_emptymask_2input.keras')
+model.save('.keras')
 
 ####################################################################
 
