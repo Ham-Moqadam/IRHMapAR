@@ -89,7 +89,7 @@ def label_connected_comps(image, size_threshold, connectivity):
 
 
 # Load the trained model
-saved_model = load_model('trained_model_more_data_emptymask_2input.keras')
+saved_model = load_model('model_2inputs_NL.keras')
 
 
 
@@ -199,11 +199,11 @@ from skimage.morphology import skeletonize
 import cv2 as cv
 kernel = np.ones((3,3))
 dilated_javab = cv.dilate(javab,kernel,iterations = 1)
-plt.imshow(dilated_javab)
+# plt.imshow(dilated_javab)
 # eroded_javab = cv.erode(dilated_javab,kernel,iterations = 1)
 # plt.imshow(eroded_javab)
 skeleton_dilated = skeletonize(dilated_javab)
-plt.imshow(skeleton_dilated)
+# plt.imshow(skeleton_dilated)
 cca_sk_dil = label_connected_comps(skeleton_dilated, 5, 8)
 
 
@@ -239,6 +239,11 @@ plt.tight_layout()
 #     javab[:,0] = array_to_work_with[:,column_no]
 # else:
 #     javab = np.column_stack((javab, array_to_work_with[:, column_no]))
+
+
+
+
+
 
 
 

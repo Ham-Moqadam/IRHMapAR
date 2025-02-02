@@ -74,6 +74,77 @@ def custom_softmax_loss(y_true, y_pred):
     return tf.reduce_mean(loss)
 
 
+
+import tensorflow as tf
+from keras.saving import register_keras_serializable
+
+@register_keras_serializable()
+def negative_likelihood_loss(y_true, y_pred, epsilon=1e-7):
+    """
+    Custom negative likelihood loss function for IRH prediction.
+    
+    Parameters:
+    - y_true: Ground truth IRH mask
+    - y_pred: Predicted IRH mask probabilities
+    - epsilon: Small constant to prevent log(0)
+    
+    Returns:
+    - Negative likelihood loss value
+    """
+    # Ensure inputs are float32
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    
+    # Clip predictions to prevent numerical instability
+    y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+    
+    # Calculate negative log likelihood for positive pixels
+    positive_loss = -tf.reduce_sum(y_true * tf.math.log(y_pred), axis=[1, 2, 3])
+    
+    # Calculate negative log likelihood for negative pixels
+    negative_loss = -tf.reduce_sum((1 - y_true) * tf.math.log(1 - y_pred), axis=[1, 2, 3])
+    
+    # Normalize by the number of pixels
+    num_pixels = tf.cast(tf.reduce_prod(tf.shape(y_true)[1:]), tf.float32)
+    total_loss = (positive_loss + negative_loss) / num_pixels
+    
+    # Return mean loss across batch
+    return tf.reduce_mean(total_loss)
+
+
+
+
+# Optional: Weighted version of the loss function
+@register_keras_serializable()
+def weighted_negative_likelihood_loss(pos_weight=2.0):
+    """
+    Factory function to create a weighted negative likelihood loss.
+    
+    Parameters:
+    - pos_weight: Weight for positive class (IRH pixels)
+    
+    Returns:
+    - Weighted loss function
+    """
+    def loss(y_true, y_pred, epsilon=1e-7):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+        
+        # Weighted loss calculation
+        positive_loss = -pos_weight * tf.reduce_sum(y_true * tf.math.log(y_pred), axis=[1, 2, 3])
+        negative_loss = -tf.reduce_sum((1 - y_true) * tf.math.log(1 - y_pred), axis=[1, 2, 3])
+        
+        num_pixels = tf.cast(tf.reduce_prod(tf.shape(y_true)[1:]), tf.float32)
+        total_loss = (positive_loss + negative_loss) / num_pixels
+        
+        return tf.reduce_mean(total_loss)
+    
+    return loss
+
+
+
+
+
 #%%
 
 
@@ -242,49 +313,27 @@ from tensorflow.keras import layers, models
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Conv2DTranspose, concatenate
 from tensorflow.keras.models import Model
 
+
+
 def unet_model_two_inputs(input_shape=(64, 64, 1)):
     """
-    Defines a U-Net model that accepts two inputs: 
-    1. The radargram patches.
-    2. An additional input (e.g., dummy or meaningful data).
-
+    Modified U-Net model that accepts radargram and incremental label inputs.
+    
     Parameters:
-    - input_shape: Shape of each input (default: (64, 64, 1)).
-
+    - input_shape: Shape of each input (default: (64, 64, 1))
+    
     Returns:
-    - A Keras model accepting two inputs.
+    - Keras model with two inputs and two outputs
     """
     # Define the two inputs
     radargram_input = Input(shape=input_shape, name="radargram_input")
-    additional_input = Input(shape=input_shape, name="additional_input")
+    incremental_label_input = Input(shape=input_shape, name="incremental_label_input")
     
-    # Combine the inputs (e.g., via concatenation)
-    combined_inputs = concatenate([radargram_input, additional_input], axis=-1)
+    # Combine the inputs
+    combined_inputs = concatenate([radargram_input, incremental_label_input], axis=-1)
     
-    # Pass the combined inputs into the U-Net architecture
-    x = unet_layers(combined_inputs)  # Modify unet_layers to take a tensor as input
-
-    # Output layers (e.g., segmentation mask and termination map)
-    mask_output = Conv2D(1, (1, 1), activation="sigmoid", name="mask_output")(x)
-    termination_output = Conv2D(1, (1, 1), activation="sigmoid", name="termination_output")(x)
-
-    # Create and return the model
-    model = Model(inputs=[radargram_input, additional_input], outputs=[mask_output, termination_output])
-    return model
-
-
-def unet_layers(inputs):
-    """
-    Defines the U-Net architecture, starting from a given tensor.
-    
-    Parameters:
-    - inputs: Input tensor.
-
-    Returns:
-    - Output tensor.
-    """
     # Encoding path (downsampling)
-    c1 = Conv2D(64, (3, 3), activation='relu', padding='same')(inputs)
+    c1 = Conv2D(64, (3, 3), activation='relu', padding='same')(combined_inputs)
     p1 = MaxPooling2D((2, 2), padding='same')(c1)
 
     c2 = Conv2D(128, (3, 3), activation='relu', padding='same')(p1)
@@ -293,23 +342,29 @@ def unet_layers(inputs):
     c3 = Conv2D(256, (3, 3), activation='relu', padding='same')(p2)
     p3 = MaxPooling2D((2, 2), padding='same')(c3)
 
-    # Bottleneck layer
+    # Bottleneck
     c4 = Conv2D(512, (3, 3), activation='relu', padding='same')(p3)
 
     # Decoding path (upsampling)
     u3 = Conv2DTranspose(256, (3, 3), strides=(2, 2), padding='same')(c4)
-    u3 = concatenate([u3, c3], axis=-1)
+    u3 = concatenate([u3, c3])
 
     u2 = Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same')(u3)
-    u2 = concatenate([u2, c2], axis=-1)
+    u2 = concatenate([u2, c2])
 
     u1 = Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same')(u2)
-    u1 = concatenate([u1, c1], axis=-1)
+    u1 = concatenate([u1, c1])
 
-    # Output tensor
-    outputs = Conv2D(64, (3, 3), activation='relu', padding='same')(u1)
-    return outputs
+    # Output layers
+    mask_output = Conv2D(1, (1, 1), activation="sigmoid", name="mask_output")(u1)
+    termination_output = Conv2D(1, (1, 1), activation="sigmoid", name="termination_output")(u1)
 
+    # Create and return the model
+    model = Model(
+        inputs=[radargram_input, incremental_label_input],
+        outputs=[mask_output, termination_output]
+    )
+    return model
 
 
 
@@ -320,44 +375,48 @@ def unet_layers(inputs):
 
 def visualize_samples(tf_dataset, num_samples=5):
     """
-    Visualize radargrams and their corresponding masks side by side.
-
+    Visualize samples from the dataset including radargrams, incremental labels, and masks.
+    
     Parameters:
-    - tf_dataset: A TensorFlow dataset containing radargram and mask pairs.
-    - num_samples: Number of samples to visualize.
+    - tf_dataset: TensorFlow dataset containing the samples
+    - num_samples: Number of samples to visualize
     """
-    samples_shown = 0  # Counter to track the number of samples shown
+    samples_shown = 0
 
-    # Iterate through batches in the dataset
-    for radargrams, (masks, _) in tf_dataset:
+    for (radargrams, incremental_labels), (masks, _) in tf_dataset:
         radargrams = radargrams.numpy()
+        incremental_labels = incremental_labels.numpy()
         masks = masks.numpy()
 
-        # Iterate over each sample in the batch
-        for radargram, mask in zip(radargrams, masks):
+        for radargram, incremental_label, mask in zip(radargrams, incremental_labels, masks):
             if samples_shown >= num_samples:
-                return  # Stop after showing the required number of samples
+                return
 
-            # Remove the channel dimension for visualization
+            # Remove channel dimension
             radargram = radargram.squeeze(axis=-1)
+            incremental_label = incremental_label.squeeze(axis=-1)
             mask = mask.squeeze(axis=-1)
 
-            # Plot radargram and mask
-            plt.figure(figsize=(10, 4))
+            plt.figure(figsize=(15, 4))
 
             # Radargram
-            plt.subplot(1, 2, 1)
+            plt.subplot(1, 3, 1)
             plt.imshow(radargram, cmap="gray")
             plt.title("Radargram")
             plt.axis("off")
 
-            # Mask
-            plt.subplot(1, 2, 2)
-            plt.imshow(mask, cmap="gray")
-            plt.title("Mask")
+            # Incremental Label
+            plt.subplot(1, 3, 2)
+            plt.imshow(incremental_label, cmap="viridis")
+            plt.title("Incremental Label")
             plt.axis("off")
 
-            # Show the plot
+            # Mask
+            plt.subplot(1, 3, 3)
+            plt.imshow(mask, cmap="gray")
+            plt.title("Target Mask")
+            plt.axis("off")
+
             plt.tight_layout()
             plt.show()
 
@@ -381,21 +440,23 @@ def load_radargram_and_mask(radargram_path, mask_path):
     mask = load_mask(mask_path)
     return radargram, mask
 
-def generate_training_data(
-    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=40):
-    """
-    Generate training samples from a radargram and mask.
 
+
+def generate_training_data(
+    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=10):
+    """
+    Generate training samples from a radargram and mask, including incremental labels.
+    
     Parameters:
     - radargram_path: path to the radargram file
     - mask_path: path to the mask file
-    - increment_size: how many pixels to increment by, when creating partial masks
-    - enforce_zero_mask_ratio: ensure 1 out of every `enforce_zero_mask_ratio` masks is all-zero
-    - samples_per_irh: how many different training samples to generate per IRH (must be passed explicitly)
+    - samples_per_irh: how many different training samples to generate per IRH
+    - increment_size: how many pixels to increment by when creating partial masks
+    - enforce_zero_mask_ratio: ensure 1 out of every n masks is all-zero
+    
+    Returns:
+    - List of tuples (radargram, incremental_label, target_mask, termination_mask)
     """
-    # if samples_per_irh is None:
-    #     raise ValueError("samples_per_irh must be provided by the calling function.")
-
     radargram, mask = load_radargram_and_mask(radargram_path, mask_path)
     labeled_mask = separate_irhs(mask)
     irh_labels = np.unique(labeled_mask)[1:]  # Exclude background (0 label)
@@ -404,24 +465,36 @@ def generate_training_data(
     counter = 0
 
     for irh_label in irh_labels:
-        # Generate incremental masks with specified increment size
+        # Generate incremental masks
         incremental_masks = generate_incremental_masks(mask, irh_label, increment_size)
         
-        # Ensure 1 out of every `enforce_zero_mask_ratio` samples is an all-zero mask
-        zero_mask_interval = enforce_zero_mask_ratio
+        # Create corresponding incremental labels
+        total_pixels = sum(np.sum(m) for m in incremental_masks)
+        
         for i in range(samples_per_irh):
-            if (i + 1) % zero_mask_interval == 0:
+            if (i + 1) % enforce_zero_mask_ratio == 0:
+                # Generate zero mask sample
                 zero_mask = np.zeros_like(mask)
-                training_samples.append((radargram, zero_mask))
+                incremental_label = np.zeros_like(mask)
+                training_samples.append((radargram, incremental_label, zero_mask, zero_mask))
                 counter += 1
                 print(f"Training sample {counter} generated (all-zero mask)")
             else:
-                random_mask = random.choice(incremental_masks)
-                training_samples.append((radargram, random_mask))
+                # Select random incremental mask
+                idx = random.randrange(len(incremental_masks))
+                selected_mask = incremental_masks[idx]
+                
+                # Create corresponding incremental label
+                incremental_label = np.zeros_like(mask)
+                pixel_count = np.sum(selected_mask)
+                incremental_label[selected_mask > 0] = pixel_count / total_pixels
+                
+                training_samples.append((radargram, incremental_label, selected_mask, np.zeros_like(mask)))
                 counter += 1
                 print(f"Training sample {counter} generated")
     
     return training_samples
+
 
 
 
@@ -432,7 +505,20 @@ import tensorflow as tf
 import numpy as np
 import os
 
+
 def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size):
+    """
+    Create TensorFlow dataset with radargram and incremental label inputs.
+    
+    Parameters:
+    - radargram_dir: directory containing radargram files
+    - mask_dir: directory containing mask files
+    - samples_per_irh: number of samples to generate per IRH
+    - batch_size: size of training batches
+    
+    Returns:
+    - TensorFlow dataset
+    """
     dataset = []
     
     for radargram_file in sorted(os.listdir(radargram_dir)):
@@ -445,35 +531,36 @@ def create_tf_data_pipeline(radargram_dir, mask_dir, samples_per_irh, batch_size
                 radargram_path, mask_path, samples_per_irh=samples_per_irh
             )
             
-            for radargram, mask in training_samples:
-                # Add the channel dimension and ensure float32
+            for radargram, incremental_label, mask, termination_mask in training_samples:
+                # Add channel dimensions and ensure float32
                 radargram = np.float32(radargram[..., np.newaxis])
+                incremental_label = np.float32(incremental_label[..., np.newaxis])
                 mask = np.float32(mask[..., np.newaxis])
-                termination_mask = np.float32(np.zeros_like(mask))  # Dummy data for second output
-
-                # Append in the required tuple structure
+                termination_mask = np.float32(termination_mask[..., np.newaxis])
+                
                 dataset.append(
-                    ((radargram, radargram), (mask, termination_mask))
+                    ((radargram, incremental_label), (mask, termination_mask))
                 )
     
     def generator():
         for inputs, outputs in dataset:
             yield inputs, outputs
 
-    # Convert to a TensorFlow dataset
+    # Convert to TensorFlow dataset
     return tf.data.Dataset.from_generator(
         generator,
         output_signature=(
             (  # Inputs
                 tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
+                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32)
             ),
             (  # Outputs
                 tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32),
+                tf.TensorSpec(shape=(64, 64, 1), dtype=tf.float32)
             )
         )
     ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
 
 
 
@@ -490,7 +577,7 @@ mask_dir = "./d_masks_64_64/"
 
 # Define the number of samples per IRH and batch size
 batch_size = 32
-samples_per_irh = 10
+samples_per_irh = 35
 
 
 # Create the dataset
@@ -532,11 +619,35 @@ model = unet_model_two_inputs(input_shape=(64, 64, 1))
 
 
 # Compile the model
+# Using the basic negative likelihood loss
+
 model.compile(
     optimizer="adam",
-    loss={"mask_output": "binary_crossentropy", "termination_output": "binary_crossentropy"},
-    metrics={"mask_output": "accuracy", "termination_output": "accuracy"}
+    loss={
+        "mask_output": negative_likelihood_loss,
+        "termination_output": "binary_crossentropy"
+    },
+    metrics={
+        "mask_output": "accuracy",
+        "termination_output": "accuracy"
+    }
 )
+"""
+
+# Or using the weighted version (if you want to give more importance to IRH pixels)
+weighted_loss = weighted_negative_likelihood_loss(pos_weight=2.0)
+model.compile(
+    optimizer="adam",
+    loss={
+        "mask_output": weighted_loss,
+        "termination_output": "binary_crossentropy"
+    },
+    metrics={
+        "mask_output": "accuracy",
+        "termination_output": "accuracy"
+    }
+)
+"""
 
 # Print the model summary
 model.summary()
@@ -584,13 +695,13 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
 ## -- train the model
 history = model.fit(
     tf_dataset,  # Your dataset should now return two inputs
-    epochs=60,
+    epochs=80,
     verbose=1,
     callbacks=[early_stopping, model_checkpoint]
 )
 
 # Save the trained model
-model.save('.keras')
+model.save('model_2inputs_NL.keras')
 
 ####################################################################
 
