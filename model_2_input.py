@@ -144,6 +144,38 @@ def weighted_negative_likelihood_loss(pos_weight=2.0):
 
 
 
+import tensorflow as tf
+
+def dice_loss(y_true, y_pred):
+    smooth = 1e-6  # To avoid division by zero
+    y_true_f = tf.keras.backend.flatten(y_true)  # Flatten to a 1D array
+    y_pred_f = tf.keras.backend.flatten(y_pred)  # Flatten to a 1D array
+    intersection = tf.reduce_sum(y_true_f * y_pred_f)  # Intersection of prediction & truth
+    return 1 - (2. * intersection + smooth) / (tf.reduce_sum(y_true_f) + tf.reduce_sum(y_pred_f) + smooth)
+
+
+import keras as K
+def focal_loss(alpha=0.25, gamma=2.0):
+    def loss(y_true, y_pred):
+        y_pred = K.clip(y_pred, 1e-7, 1 - 1e-7)  # Avoid log(0) errors
+        cross_entropy = -y_true * K.log(y_pred) - (1 - y_true) * K.log(1 - y_pred)
+        weight = alpha * y_true * K.pow(1 - y_pred, gamma) + (1 - alpha) * (1 - y_true) * K.pow(y_pred, gamma)
+        return K.mean(weight * cross_entropy)
+    return loss
+
+
+
+import tensorflow as tf
+from tensorflow.keras.losses import BinaryCrossentropy
+
+
+def combined_loss(y_true, y_pred):
+    bce_loss = BinaryCrossentropy()(y_true, y_pred)
+    dice_loss_value = dice_loss(y_true, y_pred)
+    return 0.5 * bce_loss + 0.5 * dice_loss_value
+
+
+
 
 #%%
 
@@ -312,6 +344,10 @@ from tensorflow.keras import layers, models
 
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Conv2DTranspose, concatenate
 from tensorflow.keras.models import Model
+from tensorflow.keras.layers import (Input, Conv2D, MaxPooling2D, 
+                                     Conv2DTranspose, concatenate, 
+                                     GlobalAveragePooling2D, Dense, Reshape, Lambda)
+
 
 
 
@@ -365,6 +401,66 @@ def unet_model_two_inputs(input_shape=(64, 64, 1)):
         outputs=[mask_output, termination_output]
     )
     return model
+
+
+
+def unet_model_two_inputs_new_output(input_shape=(64, 64, 1)):
+    """
+    Modified U-Net model that accepts radargram and incremental label inputs.
+    
+    Parameters:
+    - input_shape: Shape of each input (default: (64, 64, 1))
+    
+    Returns:
+    - Keras model with two inputs and two outputs
+    """
+    # Define the two inputs
+    radargram_input = Input(shape=input_shape, name="radargram_input")
+    incremental_label_input = Input(shape=input_shape, name="incremental_label_input")
+    
+    # Combine the inputs
+    combined_inputs = concatenate([radargram_input, incremental_label_input], axis=-1)
+    
+    # Encoding path (downsampling)
+    c1 = Conv2D(64, (3, 3), activation='relu', padding='same')(combined_inputs)
+    p1 = MaxPooling2D((2, 2), padding='same')(c1)
+
+    c2 = Conv2D(128, (3, 3), activation='relu', padding='same')(p1)
+    p2 = MaxPooling2D((2, 2), padding='same')(c2)
+
+    c3 = Conv2D(256, (3, 3), activation='relu', padding='same')(p2)
+    p3 = MaxPooling2D((2, 2), padding='same')(c3)
+
+    # Bottleneck
+    c4 = Conv2D(512, (3, 3), activation='relu', padding='same')(p3)
+
+    # Decoding path (upsampling)
+    u3 = Conv2DTranspose(256, (3, 3), strides=(2, 2), padding='same')(c4)
+    u3 = concatenate([u3, c3])
+
+    u2 = Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same')(u3)
+    u2 = concatenate([u2, c2])
+
+    u1 = Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same')(u2)
+    u1 = concatenate([u1, c1])
+
+    # Mask output: (64, 1)
+    mask_output = Conv2D(1, (1, 1), activation="sigmoid")(u1)  # (64, 64, 1)
+    mask_output = tf.keras.layers.GlobalAveragePooling1D(name="mask_output")(mask_output)  # (64, 1)
+
+
+    # Termination output: (1, 1)
+    termination_output = GlobalAveragePooling2D()(u1)  # Convert (64,64,64) to (64,)
+    termination_output = Dense(1, activation="sigmoid", name="termination_output")(termination_output)
+
+    # Create and return the model
+    model = Model(
+        inputs=[radargram_input, incremental_label_input],
+        outputs=[mask_output, termination_output]
+    )
+    return model
+
+
 
 
 
@@ -443,7 +539,7 @@ def load_radargram_and_mask(radargram_path, mask_path):
 
 
 def generate_training_data(
-    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=10):
+    radargram_path, mask_path, samples_per_irh, increment_size=1, enforce_zero_mask_ratio=15):
     """
     Generate training samples from a radargram and mask, including incremental labels.
     
@@ -577,7 +673,7 @@ mask_dir = "./d_masks_64_64/"
 
 # Define the number of samples per IRH and batch size
 batch_size = 32
-samples_per_irh = 35
+samples_per_irh = 50
 
 
 # Create the dataset
@@ -597,7 +693,7 @@ for data in tf_dataset.take(1):
 """
 
 ## -- shuffling the dataset globally
-buffer_size = 20  # Adjust based on your dataset size for effective shuffling
+buffer_size = 50  # Adjust based on your dataset size for effective shuffling
 tf_dataset = tf_dataset.shuffle(buffer_size, reshuffle_each_iteration=True)
 
 
@@ -624,7 +720,7 @@ model = unet_model_two_inputs(input_shape=(64, 64, 1))
 model.compile(
     optimizer="adam",
     loss={
-        "mask_output": negative_likelihood_loss,
+        "mask_output": "binary_crossentropy",
         "termination_output": "binary_crossentropy"
     },
     metrics={
@@ -632,6 +728,7 @@ model.compile(
         "termination_output": "accuracy"
     }
 )
+
 """
 
 # Or using the weighted version (if you want to give more importance to IRH pixels)
@@ -691,17 +788,18 @@ lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
 """
 
 
+
 ####################################################################
 ## -- train the model
 history = model.fit(
     tf_dataset,  # Your dataset should now return two inputs
-    epochs=80,
+    epochs=90,
     verbose=1,
     callbacks=[early_stopping, model_checkpoint]
 )
 
 # Save the trained model
-model.save('model_2inputs_NL.keras')
+model.save('2input_BCE_large_ds.keras')
 
 ####################################################################
 
