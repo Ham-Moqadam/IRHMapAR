@@ -5,7 +5,7 @@ IRHMapNet is a deep learning-based model designed to automatically trace interna
 
 ## **Key Features**
 - **Automated IRH Tracing**: The model automatically detects and traces multiple internal reflection horizons within radargram data, reducing the need for manual interpretation.
-- **Custom Deep Learning Architecture**: Built upon a modified version of the architecture described in Bojesen et al. (2023), the model is tailored for the unique characteristics of ice sheet radargrams.
+- **Custom Deep Learning Architecture**: Built upon a modified version of the architecture described in Bojesen et al. (2023)(DOI: [https://doi.org/10.1093/icesjms/fsad170](https://doi.org/10.1093/icesjms/fsad170)), the model is tailored for the unique characteristics of ice sheet radargrams.
 - **Uncertainty Estimation**: The model includes stochastic sampling to quantify uncertainty in IRH tracing and provides alternative annotation sequences.
 - **High Accuracy**: Achieves high performance in segmenting IRHs, offering a valuable tool for glaciological research and ice sheet monitoring.
 
@@ -14,7 +14,7 @@ The model requires radargram data in the form of CSV files containing 512x512 pa
 
 ## **Citation**
 If you use IRHMapNet in your research or application, please cite the following paper:
-- Bojesen, M., et al. (2023). *Annotating otoliths with a deep generative model*. Journal Name. DOI: [https://doi.org/10.1093/icesjms/fsad170](https://doi.org/10.1093/icesjms/fsad170)
+-  
 
 ## **License**
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
