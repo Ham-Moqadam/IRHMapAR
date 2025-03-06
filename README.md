@@ -14,7 +14,7 @@ The model requires radargram data in the form of CSV files containing 512x512 pa
 
 ## **Citation**
 If you use IRHMapNet in your research or application, please cite the following paper:
--  
+- ...
 
 ## **License**
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
